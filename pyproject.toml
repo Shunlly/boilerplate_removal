@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trafi-pipeline"
+version = "0.1.0"
+description = "A pragmatic pipeline around trafilatura for JS-rendered pages and list discovery."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+  { name = "Your Name", email = "you@example.com" }
+]
+keywords = ["trafilatura", "crawler", "extract", "playwright", "pipeline"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12"
+]
+dependencies = [
+  "trafilatura>=1.6"
+]
+
+[project.optional-dependencies]
+http = [
+  "httpx>=0.24"
+]
+render = [
+  "playwright>=1.41"
+]
+dev = [
+  "pytest>=7.0",
+  "ruff>=0.3",
+  "build>=1.0",
+  "twine>=4.0"
+]
+
+[project.scripts]
+trafipipe = "trafipipe.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trafipipe"]
