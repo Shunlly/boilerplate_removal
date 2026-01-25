@@ -73,6 +73,7 @@ class RenderConfig:
     extra_headers: Dict[str, str] = field(default_factory=dict)
     cookies: List[Dict[str, str]] = field(default_factory=list)
     proxy: Optional[ProxyConfig] = None
+    reuse_context: bool = False
 
 
 @dataclass
@@ -85,7 +86,9 @@ class ExtractConfig:
     include_images: bool = False
     include_comments: bool = False
     keep_images: bool = False
+    keep_videos: bool = False
     append_images: bool = False
+    append_videos: bool = False
     inline_images: bool = False
     output_format: str = "txt"
     min_text_len: int = 200
@@ -95,6 +98,7 @@ class ExtractConfig:
 class CrawlConfig:
     max_pages: int = 100
     max_depth: int = 2
+    max_workers: int = 1
     same_host_only: bool = True
     allow_domains: Optional[List[str]] = None
     allow_patterns: Sequence[str] = field(default_factory=list)

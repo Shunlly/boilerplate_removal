@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Iterable, List, Optional, Sequence
@@ -49,6 +50,10 @@ def _host(url: str) -> str:
     return urlparse(url).netloc
 
 
+def _is_http_url(url: str) -> bool:
+    return url.startswith("http://") or url.startswith("https://")
+
+
 def crawl_urls(
     start_urls: Iterable[str],
     fetch_config: FetchConfig,
@@ -70,35 +75,95 @@ def crawl_urls(
             return True
         return _host(u) in allowed_domains
 
-    queue = deque([(u, 0) for u in start_urls])
+    queue = deque()
+    queued = set()
     visited = set()
     results: List[str] = []
 
-    while queue and len(visited) < crawl_config.max_pages:
-        url, depth = queue.popleft()
-        url = _normalize_url(url, crawl_config.strip_query)
-
-        if url in visited:
-            continue
+    def _enqueue(raw_url: str, depth: int) -> None:
+        if not raw_url:
+            return
+        url = _normalize_url(raw_url, crawl_config.strip_query)
+        if not _is_http_url(url):
+            return
+        if url in visited or url in queued:
+            return
         if not domain_ok(url):
-            continue
+            return
         if not _is_allowed(url, allow_patterns, deny_patterns):
-            continue
+            return
+        queued.add(url)
+        queue.append((url, depth))
 
-        visited.add(url)
-        results.append(url)
+    for u in start_urls:
+        _enqueue(u, 0)
 
-        if depth >= crawl_config.max_depth:
-            continue
+    max_workers = max(1, int(crawl_config.max_workers or 1))
+    executor = ThreadPoolExecutor(max_workers=max_workers) if max_workers > 1 else None
 
-        try:
-            html = fetch_html(url, fetch_config)
-        except Exception:
-            continue
+    try:
+        while queue and len(visited) < crawl_config.max_pages:
+            if executor is None:
+                url, depth = queue.popleft()
+                queued.discard(url)
 
-        parser = _LinkCollector(url)
-        parser.feed(html)
-        for link in parser.links:
-            queue.append((link, depth + 1))
+                if url in visited:
+                    continue
+
+                visited.add(url)
+                results.append(url)
+
+                if depth >= crawl_config.max_depth:
+                    continue
+
+                try:
+                    html = fetch_html(url, fetch_config)
+                except Exception:
+                    continue
+
+                parser = _LinkCollector(url)
+                parser.feed(html)
+                for link in parser.links:
+                    _enqueue(link, depth + 1)
+                continue
+
+            batch = []
+            while (
+                queue
+                and len(batch) < max_workers
+                and len(visited) < crawl_config.max_pages
+            ):
+                url, depth = queue.popleft()
+                queued.discard(url)
+
+                if url in visited:
+                    continue
+
+                visited.add(url)
+                results.append(url)
+
+                if depth >= crawl_config.max_depth:
+                    continue
+
+                batch.append((url, depth))
+
+            futures = {
+                executor.submit(fetch_html, url, fetch_config): (url, depth)
+                for url, depth in batch
+            }
+            for future in as_completed(futures):
+                url, depth = futures[future]
+                try:
+                    html = future.result()
+                except Exception:
+                    continue
+
+                parser = _LinkCollector(url)
+                parser.feed(html)
+                for link in parser.links:
+                    _enqueue(link, depth + 1)
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True)
 
     return results

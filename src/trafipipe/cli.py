@@ -22,6 +22,8 @@ def _build_config(args) -> PipelineConfig:
         cfg.crawl.max_pages = args.max_pages
     if args.max_depth is not None:
         cfg.crawl.max_depth = args.max_depth
+    if getattr(args, "workers", None) is not None:
+        cfg.crawl.max_workers = args.workers
     if args.allow:
         cfg.crawl.allow_patterns = args.allow
     if args.deny:
@@ -44,6 +46,7 @@ def main(argv=None) -> int:
     p_crawl.add_argument("url", nargs="+")
     p_crawl.add_argument("--max-pages", type=int)
     p_crawl.add_argument("--max-depth", type=int)
+    p_crawl.add_argument("--workers", type=int, help="number of concurrent fetch workers")
     p_crawl.add_argument("--allow", nargs="*")
     p_crawl.add_argument("--deny", nargs="*")
     p_crawl.add_argument("--proxy")

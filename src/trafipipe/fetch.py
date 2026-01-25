@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Optional
+import atexit
+from typing import Dict, Optional, Tuple
 from urllib.request import ProxyHandler, Request, build_opener
 from urllib.error import URLError, HTTPError
 
@@ -16,28 +17,65 @@ except Exception:
     _HAS_HTTPX = False
 
 
-def _limit_bytes(data: bytes, max_bytes: Optional[int]) -> bytes:
-    if max_bytes is None:
-        return data
-    return data[:max_bytes]
+_HTTPX_CLIENTS: Dict[Tuple[Tuple[Tuple[str, str], ...], Optional[str]], "httpx.Client"] = {}
 
 
-def _httpx_client(headers, timeout, proxies):
+def _proxy_key(proxies) -> Tuple[Tuple[str, str], ...]:
+    if isinstance(proxies, dict):
+        return tuple(sorted((str(k), str(v)) for k, v in proxies.items()))
+    return tuple()
+
+
+def _httpx_client(proxies) -> "httpx.Client":
+    key = (_proxy_key(proxies), str(proxies) if not isinstance(proxies, dict) else None)
+    client = _HTTPX_CLIENTS.get(key)
+    if client is not None:
+        return client
+
     if proxies is None:
-        return httpx.Client(headers=headers, timeout=timeout, follow_redirects=True)
-    try:
-        return httpx.Client(
-            headers=headers, timeout=timeout, follow_redirects=True, proxies=proxies
-        )
-    except TypeError:
-        proxy_value = None
-        if isinstance(proxies, dict):
-            proxy_value = proxies.get("https://") or proxies.get("http://")
-        else:
-            proxy_value = proxies
-        return httpx.Client(
-            headers=headers, timeout=timeout, follow_redirects=True, proxy=proxy_value
-        )
+        client = httpx.Client(follow_redirects=True)
+    else:
+        try:
+            client = httpx.Client(follow_redirects=True, proxies=proxies)
+        except TypeError:
+            proxy_value = None
+            if isinstance(proxies, dict):
+                proxy_value = proxies.get("https://") or proxies.get("http://")
+            else:
+                proxy_value = proxies
+            client = httpx.Client(follow_redirects=True, proxy=proxy_value)
+
+    _HTTPX_CLIENTS[key] = client
+    return client
+
+
+def _close_httpx_clients() -> None:
+    for client in _HTTPX_CLIENTS.values():
+        try:
+            client.close()
+        except Exception:
+            pass
+    _HTTPX_CLIENTS.clear()
+
+
+atexit.register(_close_httpx_clients)
+
+
+def _read_limited(response, max_bytes: int) -> bytes:
+    if max_bytes <= 0:
+        return b""
+    buf = bytearray()
+    for chunk in response.iter_bytes():
+        if not chunk:
+            continue
+        remaining = max_bytes - len(buf)
+        if remaining <= 0:
+            break
+        if len(chunk) > remaining:
+            buf.extend(chunk[:remaining])
+            break
+        buf.extend(chunk)
+    return bytes(buf)
 
 
 def fetch_html(url: str, config: FetchConfig) -> str:
@@ -47,20 +85,23 @@ def fetch_html(url: str, config: FetchConfig) -> str:
     if _HAS_HTTPX:
         proxies = config.proxy.to_httpx() if config.proxy else None
         try:
-            with _httpx_client(headers, config.timeout, proxies) as client:
-                resp = client.get(url)
+            client = _httpx_client(proxies)
+            if config.max_bytes is None:
+                resp = client.get(url, headers=headers, timeout=config.timeout)
+                if resp.status_code >= 400:
+                    raise FetchError(f"httpx status {resp.status_code} for {url}")
+                return resp.text
+
+            with client.stream(
+                "GET", url, headers=headers, timeout=config.timeout
+            ) as resp:
+                if resp.status_code >= 400:
+                    raise FetchError(f"httpx status {resp.status_code} for {url}")
+                raw = _read_limited(resp, config.max_bytes)
+                encoding = resp.encoding or "utf-8"
+                return raw.decode(encoding, errors="replace")
         except Exception as exc:
             raise FetchError(f"httpx fetch failed: {exc}") from exc
-
-        if resp.status_code >= 400:
-            raise FetchError(f"httpx status {resp.status_code} for {url}")
-
-        text = resp.text
-        if config.max_bytes is not None:
-            raw = resp.content
-            raw = _limit_bytes(raw, config.max_bytes)
-            text = raw.decode(resp.encoding or "utf-8", errors="replace")
-        return text
 
     proxies = config.proxy.to_urllib() if config.proxy else None
     opener = build_opener(ProxyHandler(proxies or {}))
