@@ -260,6 +260,21 @@ def _parse_img_attributes(tag: str) -> Dict[str, Optional[str]]:
     return attrs
 
 
+def _parse_tag_attributes(tag: str) -> Dict[str, Optional[str]]:
+    match = re.match(r"<[a-zA-Z0-9]+\b(.*?)(/?)\s*>", tag, re.IGNORECASE | re.DOTALL)
+    if not match:
+        return {}
+    attrs_raw = match.group(1) or ""
+    attrs: Dict[str, Optional[str]] = {}
+    for attr_match in _IMG_ATTR_RE.finditer(attrs_raw):
+        name = attr_match.group(1)
+        value = attr_match.group(2) or attr_match.group(3) or attr_match.group(4)
+        if not name:
+            continue
+        attrs[name.lower()] = value
+    return attrs
+
+
 def _pick_inline_image_url(
     attrs: Dict[str, Optional[str]], base_url: Optional[str]
 ) -> Optional[str]:
@@ -488,6 +503,10 @@ _VIDEO_META_KEYS = {
 _VIDEO_TAGS = {"video", "source"}
 _VIDEO_ATTRS = {"src", "data-src", "data-original", "data-url"}
 
+_VIDEO_BLOCK_RE = re.compile(r"<video\b[^>]*>.*?</video>", re.IGNORECASE | re.DOTALL)
+_VIDEO_TAG_RE = re.compile(r"<video\b[^>]*>", re.IGNORECASE | re.DOTALL)
+_SOURCE_TAG_RE = re.compile(r"<source\b[^>]*>", re.IGNORECASE | re.DOTALL)
+
 
 def _is_placeholder_media(src: str) -> bool:
     lowered = src.strip().lower()
@@ -506,6 +525,56 @@ def _normalize_media_url(value: str, base_url: Optional[str]) -> Optional[str]:
     if base_url:
         src = urljoin(base_url, src)
     return src
+
+
+def _extract_media_urls_from_tag(
+    tag: str, base_url: Optional[str]
+) -> List[str]:
+    attrs = _parse_tag_attributes(tag)
+    urls: List[str] = []
+    for key in _VIDEO_ATTRS:
+        value = attrs.get(key)
+        if not value:
+            continue
+        normalized = _normalize_media_url(value, base_url)
+        if normalized:
+            urls.append(normalized)
+            break
+    return urls
+
+
+def _inline_video_placeholders(html: str, base_url: Optional[str]) -> str:
+    def _format(urls: List[str]) -> str:
+        if not urls:
+            return ""
+        seen = set()
+        lines = []
+        for url in urls:
+            if url in seen:
+                continue
+            seen.add(url)
+            safe_url = escape(url, quote=False)
+            lines.append(f"[Video] {safe_url}")
+        return "\n".join(lines)
+
+    def _replace_block(match: re.Match) -> str:
+        block = match.group(0)
+        urls = []
+        urls.extend(_extract_media_urls_from_tag(block, base_url))
+        for src_tag in _SOURCE_TAG_RE.finditer(block):
+            urls.extend(_extract_media_urls_from_tag(src_tag.group(0), base_url))
+        formatted = _format(urls)
+        return formatted or block
+
+    def _replace_tag(match: re.Match) -> str:
+        tag = match.group(0)
+        urls = _extract_media_urls_from_tag(tag, base_url)
+        formatted = _format(urls)
+        return formatted or tag
+
+    html = _VIDEO_BLOCK_RE.sub(_replace_block, html)
+    html = _VIDEO_TAG_RE.sub(_replace_tag, html)
+    return html
 
 
 def _looks_like_video_url(url: str) -> bool:
@@ -718,6 +787,8 @@ def extract_text_and_metadata(
     html_for_extract = html
     if config.inline_images:
         html_for_extract = _promote_inline_images(html_for_extract, url)
+    if config.inline_videos:
+        html_for_extract = _inline_video_placeholders(html_for_extract, url)
 
     text, doc = _run_trafilatura(html_for_extract, url, config, output_format)
     meta = _meta_from_document(doc, url) if config.with_metadata else {}

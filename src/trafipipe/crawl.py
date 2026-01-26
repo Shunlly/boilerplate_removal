@@ -117,9 +117,10 @@ def crawl_urls(
                     continue
 
                 try:
-                    html = fetch_html(url, fetch_config)
+                    fetched = fetch_html(url, fetch_config)
                 except Exception:
                     continue
+                html = fetched.html
 
                 parser = _LinkCollector(url)
                 parser.feed(html)
@@ -154,9 +155,10 @@ def crawl_urls(
             for future in as_completed(futures):
                 url, depth = futures[future]
                 try:
-                    html = future.result()
+                    fetched = future.result()
                 except Exception:
                     continue
+                html = fetched.html
 
                 parser = _LinkCollector(url)
                 parser.feed(html)

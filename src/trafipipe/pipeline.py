@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 import time
 from typing import Iterable, List, Optional
@@ -28,6 +29,7 @@ class ExtractResult:
     text: Optional[str]
     used_render: bool = False
     error: Optional[str] = None
+    status_code: Optional[int] = None
     images: List[str] = field(default_factory=list)
     videos: List[str] = field(default_factory=list)
     title: Optional[str] = None
@@ -168,7 +170,7 @@ class Pipeline:
         include_videos = (
             self.config.extract.keep_videos
             or self.config.extract.append_videos
-            or self.config.extract.inline_images
+            or self.config.extract.inline_videos
         )
         if include_videos:
             video_start = time.monotonic()
@@ -181,9 +183,7 @@ class Pipeline:
                         continue
                     seen.add(media_url)
                     videos.append(media_url)
-            should_append = (
-                self.config.extract.append_videos or self.config.extract.inline_images
-            )
+            should_append = self.config.extract.append_videos
             if text and videos and should_append:
                 text = _append_videos_to_text(text, videos, url)
             video_ms = (time.monotonic() - video_start) * 1000.0
@@ -201,6 +201,7 @@ class Pipeline:
             *,
             meta=None,
             error=None,
+            status_code=None,
             fetch_ms=None,
             render_ms=None,
             extract_ms=None,
@@ -219,6 +220,7 @@ class Pipeline:
                 text=text,
                 used_render=used_render,
                 error=error,
+                status_code=status_code,
                 images=images,
                 videos=videos,
                 title=meta.get("title"),
@@ -260,13 +262,18 @@ class Pipeline:
                 )
 
         fetch_ms = None
+        fetch_status = None
         try:
             fetch_start = time.monotonic()
-            html = fetch_html(url, self.config.fetch)
+            fetched = fetch_html(url, self.config.fetch)
             fetch_ms = (time.monotonic() - fetch_start) * 1000.0
+            fetch_status = fetched.status_code
+            html = fetched.html
         except FetchError as exc:
             if fetch_ms is None:
                 fetch_ms = (time.monotonic() - fetch_start) * 1000.0
+            fetch_status = exc.status_code
+            fetch_error = str(exc)
             if self.config.render.mode != "never":
                 try:
                     render_start = time.monotonic()
@@ -284,6 +291,7 @@ class Pipeline:
                         images,
                         videos,
                         meta=meta,
+                        status_code=fetch_status,
                         fetch_ms=fetch_ms,
                         render_ms=render_ms,
                         extract_ms=extract_ms,
@@ -298,12 +306,20 @@ class Pipeline:
                         None,
                         [],
                         [],
-                        error=str(render_exc),
+                        error=f"{fetch_error}; render failed: {render_exc}",
+                        status_code=fetch_status,
                         fetch_ms=fetch_ms,
                         render_ms=render_ms,
                     )
             return _build_result(
-                None, False, None, [], [], error=str(exc), fetch_ms=fetch_ms
+                None,
+                False,
+                None,
+                [],
+                [],
+                error=fetch_error,
+                status_code=fetch_status,
+                fetch_ms=fetch_ms,
             )
 
         text, images, videos, meta, extract_ms, image_ms, video_ms = (
@@ -326,6 +342,7 @@ class Pipeline:
                     images,
                     videos,
                     meta=meta,
+                    status_code=fetch_status,
                     fetch_ms=fetch_ms,
                     render_ms=render_ms,
                     extract_ms=extract_ms,
@@ -342,6 +359,7 @@ class Pipeline:
                     videos,
                     meta=meta,
                     error=str(exc),
+                    status_code=fetch_status,
                     fetch_ms=fetch_ms,
                     render_ms=render_ms,
                     extract_ms=extract_ms,
@@ -356,6 +374,7 @@ class Pipeline:
             images,
             videos,
             meta=meta,
+            status_code=fetch_status,
             fetch_ms=fetch_ms,
             extract_ms=extract_ms,
             image_ms=image_ms,
@@ -365,8 +384,33 @@ class Pipeline:
     def crawl(self, start_urls: Iterable[str]) -> List[str]:
         return crawl_urls(start_urls, self.config.fetch, self.config.crawl)
 
-    def crawl_and_extract(self, start_urls: Iterable[str]) -> List[ExtractResult]:
-        results: List[ExtractResult] = []
-        for url in self.crawl(start_urls):
-            results.append(self.extract_url(url))
-        return results
+    def crawl_and_extract(
+        self, start_urls: Iterable[str], max_workers: Optional[int] = None
+    ) -> List[ExtractResult]:
+        urls = list(self.crawl(start_urls))
+        if not urls:
+            return []
+
+        if max_workers is None:
+            max_workers = self.config.crawl.max_workers
+        max_workers = max(1, int(max_workers or 1))
+        if max_workers <= 1:
+            return [self.extract_url(url) for url in urls]
+
+        results: List[Optional[ExtractResult]] = [None] * len(urls)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self.extract_url, url): idx
+                for idx, url in enumerate(urls)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    results[idx] = future.result()
+                except Exception as exc:
+                    results[idx] = ExtractResult(
+                        url=urls[idx],
+                        text=None,
+                        error=str(exc),
+                    )
+        return [r for r in results if r is not None]

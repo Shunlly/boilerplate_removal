@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import atexit
+from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 from urllib.request import ProxyHandler, Request, build_opener
 from urllib.error import URLError, HTTPError
 
 from .config import FetchConfig
 from .exceptions import FetchError
+
+
+@dataclass
+class FetchResult:
+    html: str
+    status_code: int
 
 try:
     import httpx
@@ -78,7 +85,7 @@ def _read_limited(response, max_bytes: int) -> bytes:
     return bytes(buf)
 
 
-def fetch_html(url: str, config: FetchConfig) -> str:
+def fetch_html(url: str, config: FetchConfig) -> FetchResult:
     headers = {"User-Agent": config.user_agent}
     headers.update(config.headers or {})
 
@@ -89,17 +96,23 @@ def fetch_html(url: str, config: FetchConfig) -> str:
             if config.max_bytes is None:
                 resp = client.get(url, headers=headers, timeout=config.timeout)
                 if resp.status_code >= 400:
-                    raise FetchError(f"httpx status {resp.status_code} for {url}")
-                return resp.text
+                    raise FetchError(
+                        f"httpx status {resp.status_code} for {url}",
+                        status_code=resp.status_code,
+                    )
+                return FetchResult(resp.text, resp.status_code)
 
             with client.stream(
                 "GET", url, headers=headers, timeout=config.timeout
             ) as resp:
                 if resp.status_code >= 400:
-                    raise FetchError(f"httpx status {resp.status_code} for {url}")
+                    raise FetchError(
+                        f"httpx status {resp.status_code} for {url}",
+                        status_code=resp.status_code,
+                    )
                 raw = _read_limited(resp, config.max_bytes)
                 encoding = resp.encoding or "utf-8"
-                return raw.decode(encoding, errors="replace")
+                return FetchResult(raw.decode(encoding, errors="replace"), resp.status_code)
         except Exception as exc:
             raise FetchError(f"httpx fetch failed: {exc}") from exc
 
@@ -110,6 +123,11 @@ def fetch_html(url: str, config: FetchConfig) -> str:
         with opener.open(req, timeout=config.timeout) as resp:
             raw = resp.read(config.max_bytes or None)
             charset = resp.headers.get_content_charset() or "utf-8"
-            return raw.decode(charset, errors="replace")
+            status = resp.getcode() or 200
+            return FetchResult(raw.decode(charset, errors="replace"), int(status))
     except (HTTPError, URLError) as exc:
-        raise FetchError(f"urllib fetch failed: {exc}") from exc
+        status_code = getattr(exc, "code", None)
+        raise FetchError(
+            f"urllib fetch failed: {exc}",
+            status_code=status_code if isinstance(status_code, int) else None,
+        ) from exc

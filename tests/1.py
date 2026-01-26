@@ -1,3 +1,5 @@
+import datetime
+
 from trafipipe import Pipeline, PipelineConfig
 
 cfg = PipelineConfig()
@@ -10,7 +12,9 @@ cfg.extract.inline_videos = True   # 关键
 cfg.extract.output_format = "md"
 # cfg.render.extra_headers = {"Referer": "https://x.com/"}
 
-r = Pipeline(cfg).extract_url("https://www.wondercv.com/jianlimoban/")
+print(datetime.datetime.now())
+r = Pipeline(cfg).extract_url("https://linux.do")
 print(r.text)
 # print(r.videos)
-print(r.elapsed_ms)
+print(r.elapsed_ms/1000, "s")
+print(datetime.datetime.now())

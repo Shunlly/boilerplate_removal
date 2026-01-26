@@ -90,6 +90,7 @@ class ExtractConfig:
     append_images: bool = False
     append_videos: bool = False
     inline_images: bool = False
+    inline_videos: bool = False
     output_format: str = "txt"
     min_text_len: int = 200
 

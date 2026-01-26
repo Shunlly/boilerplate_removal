@@ -4,13 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "trafi-pipeline"
-version = "0.1.0"
+version = "0.1.1"
 description = "A pragmatic pipeline around trafilatura for JS-rendered pages and list discovery."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
+url="https://github.com/Shunlly/boilerplate_removal"
 authors = [
-  { name = "Your Name", email = "you@example.com" }
+  { name = "shully", email = "a330289953@gmail.com" }
 ]
 keywords = ["trafilatura", "crawler", "extract", "playwright", "pipeline"]
 classifiers = [
@@ -45,3 +46,14 @@ trafipipe = "trafipipe.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/trafipipe"]
+
+[tool.hatch.build]
+exclude = [
+  "/.venv",
+  "/.venv-publish",
+  "/.pytest_cache",
+  "/.ruff_cache",
+  "/__pycache__",
+  "/build",
+  "/dist",
+]

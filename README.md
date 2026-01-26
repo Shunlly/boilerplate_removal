@@ -14,16 +14,21 @@
 pip install trafi-pipeline
 ```
 
-可选依赖：
+建议完整安装（抓取 + 渲染能力都具备）：
+```bash
+pip install "trafi-pipeline[http,render]"
+python -m playwright install chromium
+```
+
+分开安装（更细粒度控制）：
 ```bash
 pip install "trafi-pipeline[http]"      # 使用 httpx
 pip install "trafi-pipeline[render]"    # 使用 Playwright 进行渲染
 ```
 
-首次使用 Playwright 需要安装浏览器：
-```bash
-python -m playwright install chromium
-```
+说明：
+- 默认配置 `render.mode="auto"`，可能会触发渲染；若未安装 `render` 依赖或未安装浏览器，将导致结果为空或报错。
+- 如果不需要渲染，请显式设置 `render.mode="never"`，避免依赖缺失导致失败。
 
 ## 快速开始
 ```python
@@ -39,12 +44,15 @@ print(result.text)
 - `title`：标题
 - `source`：来源站点
 - `images`：图片 URL 列表
+- `videos`：视频 URL 列表
 - `used_render`：是否使用渲染
+- `status_code`：抓取到的 HTTP 状态码（抓取失败时可能为空）
 - `elapsed_ms`：耗时（毫秒）
 - `fetch_ms`：抓取耗时（毫秒）
 - `render_ms`：渲染耗时（毫秒）
 - `extract_ms`：正文抽取耗时（毫秒）
 - `image_ms`：图片收集耗时（毫秒）
+- `video_ms`：视频收集耗时（毫秒）
 - `error`：错误信息（如有）
 
 ## 常见配置
@@ -74,11 +82,15 @@ cfg = PipelineConfig()
 cfg.extract.keep_images = True
 cfg.extract.append_images = True   # 在正文末尾追加 [Images] 列表
 cfg.extract.inline_images = False  # 设为 True 时输出 Markdown 并原位插入图片
+cfg.extract.keep_videos = True
+cfg.extract.append_videos = False  # 在正文末尾追加 [Videos] 列表
+cfg.extract.inline_videos = False  # 设为 True 时会在正文中插入 [Video] url
 cfg.extract.output_format = "txt"  # "txt" 或 "md"
 ```
 
 说明：
 - 当 `inline_images=True` 且 `output_format="txt"` 时，会把 `![](url)` 转为 `[Image] url`。
+- 当 `inline_videos=True` 时，会把 HTML 中的 `<video>/<source>` 转成 `[Video] url`。
 
 ### 微信文章图片（mp.weixin.qq.com）
 ```python
@@ -108,7 +120,7 @@ cfg.crawl.max_workers = 4  # 并发抓取列表页
 
 pipeline = Pipeline(cfg)
 urls = pipeline.crawl(["https://example.com/list"])
-results = [pipeline.extract_url(u) for u in urls]
+results = pipeline.crawl_and_extract(urls, max_workers=4)
 ```
 
 ## CLI
@@ -130,11 +142,3 @@ python doc/benchmark.py --file doc/urls.txt --render auto --repeat 1
 python doc/benchmark.py --file doc/urls.txt --format csv --summary > report.csv
 python doc/benchmark.py --file doc/urls.txt --format json --summary > report.json
 ```
-
-## 发布到 PyPI
-```bash
-python -m build
-python -m twine upload dist/*
-```
-
-> 发布前请更新 `pyproject.toml` 的包名与作者信息。
