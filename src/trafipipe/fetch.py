@@ -35,6 +35,7 @@ _META_HTTP_EQUIV_RE = re.compile(
     br'<meta[^>]+http-equiv=["\']?content-type["\']?[^>]*content=["\'][^"\']*charset=([A-Za-z0-9._-]+)',
     re.IGNORECASE,
 )
+_CONTENT_TYPE_CHARSET_RE = re.compile(r"charset=([A-Za-z0-9._-]+)", re.IGNORECASE)
 
 
 def _normalize_encoding(value: str) -> str:
@@ -46,6 +47,16 @@ def _normalize_encoding(value: str) -> str:
     if enc in {"gb2312", "gbk"}:
         return "gb18030"
     return enc
+
+
+def _charset_from_content_type(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    match = _CONTENT_TYPE_CHARSET_RE.search(value)
+    if not match:
+        return None
+    enc = _normalize_encoding(match.group(1))
+    return enc or None
 
 
 def _detect_encoding(raw: bytes, header_encoding: Optional[str]) -> str:
@@ -155,7 +166,8 @@ def fetch_html(url: str, config: FetchConfig) -> FetchResult:
                         status_code=resp.status_code,
                     )
                 raw = resp.content
-                text = _decode_response(raw, resp.encoding)
+                header_encoding = _charset_from_content_type(resp.headers.get("content-type"))
+                text = _decode_response(raw, header_encoding)
                 return FetchResult(text, resp.status_code)
 
             with client.stream(
@@ -167,7 +179,8 @@ def fetch_html(url: str, config: FetchConfig) -> FetchResult:
                         status_code=resp.status_code,
                     )
                 raw = _read_limited(resp, config.max_bytes)
-                text = _decode_response(raw, resp.encoding)
+                header_encoding = _charset_from_content_type(resp.headers.get("content-type"))
+                text = _decode_response(raw, header_encoding)
                 return FetchResult(text, resp.status_code)
         except Exception as exc:
             raise FetchError(f"httpx fetch failed: {exc}") from exc
