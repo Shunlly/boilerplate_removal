@@ -53,6 +53,22 @@ def _should_render(text: Optional[str], cfg: PipelineConfig) -> bool:
     return len(text.strip()) < cfg.extract.min_text_len
 
 
+_RENDER_STRONG_MARKERS = (
+    "展开全文",
+    "阅读全文",
+    "查看全部",
+    "点击展开",
+)
+
+
+def _should_render_by_markers(html: Optional[str]) -> bool:
+    if not html:
+        return False
+    if any(marker in html for marker in _RENDER_STRONG_MARKERS):
+        return True
+    return "展开" in html and "更多" in html
+
+
 def _hostname(url: str) -> str:
     try:
         return (urlparse(url).hostname or "").lower()
@@ -325,7 +341,7 @@ class Pipeline:
         text, images, videos, meta, extract_ms, image_ms, video_ms = (
             self._extract_with_images(html, url)
         )
-        if _should_render(text, self.config):
+        if _should_render(text, self.config) or _should_render_by_markers(html):
             try:
                 render_start = time.monotonic()
                 rendered, media_urls = render_html_with_media(

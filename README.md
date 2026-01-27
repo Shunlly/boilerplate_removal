@@ -4,6 +4,7 @@
 
 ## 特性
 - 自动渲染策略：`auto | always | never`，正文过短或抓取失败时可自动切换渲染
+- `auto` 模式还会根据页面“展开/更多/阅读全文”等标记触发渲染，避免只抓到摘要
 - 列表页爬取：按深度与页数限制发现详情页链接
 - 代理支持：抓取/渲染分别配置代理
 - 图片处理：保留图片、追加图片列表、或原位插入（Markdown）
@@ -81,7 +82,7 @@ result = pipeline.extract_url("https://example.com/article")
 cfg = PipelineConfig()
 cfg.extract.keep_images = True
 cfg.extract.append_images = True   # 在正文末尾追加 [Images] 列表
-cfg.extract.inline_images = False  # 设为 True 时输出 Markdown 并原位插入图片
+cfg.extract.inline_images = False  # 设为 True 时输出 Markdown 并原位插入图片（对所有站点生效）
 cfg.extract.keep_videos = True
 cfg.extract.append_videos = False  # 在正文末尾追加 [Videos] 列表
 cfg.extract.inline_videos = False  # 设为 True 时会在正文中插入 [Video] url

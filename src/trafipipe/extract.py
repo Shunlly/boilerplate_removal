@@ -382,15 +382,15 @@ def _inline_markdown_images(html: str, base_url: Optional[str]) -> str:
 
 
 def _promote_inline_images(html: str, url: Optional[str]) -> str:
-    if not url or "mp.weixin.qq.com" not in url:
-        return html
-    content = _extract_wechat_content(html)
-    if content:
-        title = _extract_title(html)
-        head = f"<head><title>{escape(title)}</title></head>" if title else ""
-        html = f"<html>{head}<body>{content}</body></html>"
-    html = _rewrite_img_tags(html)
-    return _inline_markdown_images(html, url)
+    html_for_images = html
+    if url and "mp.weixin.qq.com" in url:
+        content = _extract_wechat_content(html)
+        if content:
+            title = _extract_title(html)
+            head = f"<head><title>{escape(title)}</title></head>" if title else ""
+            html_for_images = f"<html>{head}<body>{content}</body></html>"
+    html_for_images = _rewrite_img_tags(html_for_images)
+    return _inline_markdown_images(html_for_images, url)
 
 
 def _collect_style_urls(html: str, base_url: Optional[str]) -> List[str]:
@@ -732,6 +732,88 @@ def _extract_wechat_content(html: str) -> Optional[str]:
     return parser.get_html()
 
 
+class _DivClassCollector(HTMLParser):
+    def __init__(self, class_name: str) -> None:
+        super().__init__(convert_charrefs=False)
+        self._class_name = class_name
+        self._capture = False
+        self._depth = 0
+        self._parts: List[str] = []
+
+    def _has_class(self, attrs) -> bool:
+        for key, value in attrs:
+            if key.lower() == "class" and value:
+                classes = value.split()
+                return self._class_name in classes
+        return False
+
+    def handle_starttag(self, tag, attrs):
+        tag_lower = tag.lower()
+        if not self._capture:
+            if tag_lower == "div" and self._has_class(attrs):
+                self._capture = True
+                self._depth = 1
+                start = self.get_starttag_text() or f"<{tag}>"
+                self._parts.append(start)
+            return
+
+        start = self.get_starttag_text() or f"<{tag}>"
+        self._parts.append(start)
+        if tag_lower not in _VOID_TAGS:
+            self._depth += 1
+
+    def handle_startendtag(self, tag, attrs):
+        if not self._capture:
+            return
+        start = self.get_starttag_text() or f"<{tag} />"
+        self._parts.append(start)
+
+    def handle_endtag(self, tag):
+        if not self._capture:
+            return
+        tag_lower = tag.lower()
+        if tag_lower in _VOID_TAGS:
+            return
+        self._depth -= 1
+        if self._depth <= 0:
+            self._capture = False
+            return
+        self._parts.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        if self._capture:
+            self._parts.append(data)
+
+    def handle_entityref(self, name):
+        if self._capture:
+            self._parts.append(f"&{name};")
+
+    def handle_charref(self, name):
+        if self._capture:
+            self._parts.append(f"&#{name};")
+
+    def get_html(self) -> Optional[str]:
+        html = "".join(self._parts).strip()
+        return html or None
+
+
+def _extract_div_by_class(html: str, class_name: str) -> Optional[str]:
+    parser = _DivClassCollector(class_name)
+    parser.feed(html)
+    return parser.get_html()
+
+
+def _narrow_book118_html(html: str, url: Optional[str]) -> str:
+    if not url or "book118.com" not in url:
+        return html
+    content = _extract_div_by_class(html, "article")
+    if content:
+        title = _extract_title(html)
+        head = f"<head><title>{escape(title)}</title></head>" if title else ""
+        return f"<html>{head}<body>{content}</body></html>"
+    return html
+
+
 def _collect_wechat_images(html: str, url: Optional[str]) -> List[str]:
     if not url or "mp.weixin.qq.com" not in url:
         return []
@@ -784,7 +866,7 @@ def extract_text_and_metadata(
     fmt = _normalize_output_format(config.output_format)
     output_format = "markdown" if config.inline_images else fmt
 
-    html_for_extract = html
+    html_for_extract = _narrow_book118_html(html, url)
     if config.inline_images:
         html_for_extract = _promote_inline_images(html_for_extract, url)
     if config.inline_videos:
