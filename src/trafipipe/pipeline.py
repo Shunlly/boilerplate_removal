@@ -124,12 +124,44 @@ def _strip_x_boilerplate(text: str) -> str:
     return "\n".join(lines)
 
 
+_ZUOWEN_FOOTER_MARKERS = (
+    "作文网版权所有",
+    "京ICP备",
+    "违法和不良信息举报电话",
+    "举报邮箱",
+)
+
+
+def _strip_zuowen_footer(text: str) -> str:
+    if not text:
+        return text
+    lines = text.splitlines()
+    cut_idx = None
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if "关于我们" in stripped and "|" in stripped:
+            cut_idx = idx
+            break
+        if any(marker in stripped for marker in _ZUOWEN_FOOTER_MARKERS):
+            cut_idx = idx
+            break
+    if cut_idx is not None:
+        lines = lines[:cut_idx]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
+
+
 def _clean_text_for_url(text: Optional[str], url: str) -> Optional[str]:
     if not text:
         return text
     host = _hostname(url)
     if host.endswith("x.com") or host.endswith("twitter.com"):
         return _strip_x_boilerplate(text)
+    if host.endswith("zuowen.com"):
+        return _strip_zuowen_footer(text)
     return text
 
 
