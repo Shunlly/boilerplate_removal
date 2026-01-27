@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "trafi-pipeline"
-version = "0.1.4"
+version = "0.1.5"
 description = "A pragmatic pipeline around trafilatura for JS-rendered pages and list discovery."
 readme = "README.md"
 requires-python = ">=3.9"
