@@ -58,7 +58,9 @@ class FetchConfig:
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     )
-    headers: Dict[str, str] = field(default_factory=dict)
+    headers: Dict[str, str] = field(
+        default_factory=lambda: {"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}
+    )
     proxy: Optional[ProxyConfig] = None
     max_bytes: Optional[int] = 2_000_000
 
@@ -70,7 +72,9 @@ class RenderConfig:
     wait_selector: Optional[str] = None
     ignore_wait_timeout: bool = True
     block_resources: bool = True
-    extra_headers: Dict[str, str] = field(default_factory=dict)
+    extra_headers: Dict[str, str] = field(
+        default_factory=lambda: {"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}
+    )
     cookies: List[Dict[str, str]] = field(default_factory=list)
     proxy: Optional[ProxyConfig] = None
     reuse_context: bool = False

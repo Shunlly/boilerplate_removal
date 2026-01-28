@@ -5,6 +5,7 @@ from html import escape, unescape
 from html.parser import HTMLParser
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
+from xml.etree import ElementTree
 
 from trafilatura import bare_extraction, extract_metadata as trafi_extract_metadata
 from trafilatura.core import determine_returnstring
@@ -42,6 +43,7 @@ _IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
 _IMG_ATTR_RE = re.compile(
     r'([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+)))?'
 )
+_SVG_BLOCK_RE = re.compile(r"<svg\b[^>]*>.*?</svg>", re.IGNORECASE | re.DOTALL)
 
 _HUANQIU_BLOCK_MARKERS = [
     "adblock",
@@ -258,6 +260,67 @@ def _parse_img_attributes(tag: str) -> Dict[str, Optional[str]]:
             continue
         attrs[name.lower()] = value
     return attrs
+
+
+def _svg_tag_name(tag: str) -> str:
+    if "}" in tag:
+        return tag.rsplit("}", 1)[-1].lower()
+    return tag.lower()
+
+
+def _parse_svg_text_nodes(svg: str) -> List[Tuple[float, float, str]]:
+    try:
+        root = ElementTree.fromstring(svg)
+    except Exception:
+        return []
+    items: List[Tuple[float, float, str]] = []
+    for elem in root.iter():
+        name = _svg_tag_name(elem.tag)
+        if name not in {"text", "tspan"}:
+            continue
+        raw_text = "".join(elem.itertext()).strip()
+        if not raw_text:
+            continue
+        y_attr = elem.get("y")
+        x_attr = elem.get("x")
+        if not y_attr and not x_attr:
+            continue
+        try:
+            y_val = float((y_attr or "0").split()[0])
+            x_val = float((x_attr or "0").split()[0])
+        except Exception:
+            continue
+        items.append((y_val, x_val, raw_text))
+    return items
+
+
+def _extract_svg_text(html: str) -> Optional[str]:
+    if not html:
+        return None
+    items: List[Tuple[float, float, str]] = []
+    for match in _SVG_BLOCK_RE.finditer(html):
+        svg = match.group(0)
+        items.extend(_parse_svg_text_nodes(svg))
+    if not items:
+        return None
+    # Group by y (line), then sort by x within line.
+    items.sort(key=lambda v: (round(v[0], 1), v[1]))
+    lines: List[str] = []
+    current_y = None
+    line_parts: List[str] = []
+    for y, x, text in items:
+        y_key = round(y, 1)
+        if current_y is None or abs(y_key - current_y) > 0.1:
+            if line_parts:
+                lines.append("".join(line_parts).strip())
+            line_parts = [text]
+            current_y = y_key
+        else:
+            line_parts.append(text)
+    if line_parts:
+        lines.append("".join(line_parts).strip())
+    lines = [ln for ln in lines if ln]
+    return "\n".join(lines) if lines else None
 
 
 def _parse_tag_attributes(tag: str) -> Dict[str, Optional[str]]:
@@ -873,6 +936,11 @@ def extract_text_and_metadata(
         html_for_extract = _inline_video_placeholders(html_for_extract, url)
 
     text, doc = _run_trafilatura(html_for_extract, url, config, output_format)
+    svg_text = _extract_svg_text(html)
+    if svg_text:
+        current = (text or "").strip()
+        if not current or len(svg_text) > len(current):
+            text = svg_text
     meta = _meta_from_document(doc, url) if config.with_metadata else {}
 
     if url and "huanqiu.com" in url:

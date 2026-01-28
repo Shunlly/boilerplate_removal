@@ -124,6 +124,37 @@ def _strip_x_boilerplate(text: str) -> str:
     return "\n".join(lines)
 
 
+_CAPTCHA_STRONG_MARKERS = (
+    "验证码",
+    "人机验证",
+    "滑块验证",
+    "安全验证",
+    "行为验证",
+    "点击继续访问",
+    "点此继续访问",
+    "验证后继续访问",
+    "请完成验证",
+    "geetest",
+    "极验",
+    "tencentcaptcha",
+    "recaptcha",
+    "g-recaptcha",
+    "hcaptcha",
+    "cf-chl",
+    "cloudflare",
+)
+
+
+def _is_captcha_html(html: Optional[str]) -> bool:
+    if not html:
+        return False
+    lowered = html.lower()
+    for marker in _CAPTCHA_STRONG_MARKERS:
+        if marker in html or marker in lowered:
+            return True
+    return False
+
+
 _ZUOWEN_FOOTER_MARKERS = (
     "作文网版权所有",
     "京ICP备",
@@ -288,6 +319,16 @@ class Pipeline:
                     url, self.config.render, self.config.fetch.user_agent
                 )
                 render_ms = (time.monotonic() - render_start) * 1000.0
+                if _is_captcha_html(rendered):
+                    return _build_result(
+                        None,
+                        True,
+                        None,
+                        [],
+                        [],
+                        error="captcha_detected",
+                        render_ms=render_ms,
+                    )
                 text, images, videos, meta, extract_ms, image_ms, video_ms = (
                     self._extract_with_images(rendered, url, media_urls=media_urls)
                 )
@@ -317,6 +358,17 @@ class Pipeline:
             fetch_ms = (time.monotonic() - fetch_start) * 1000.0
             fetch_status = fetched.status_code
             html = fetched.html
+            if _is_captcha_html(html):
+                return _build_result(
+                    None,
+                    False,
+                    None,
+                    [],
+                    [],
+                    error="captcha_detected",
+                    status_code=fetch_status,
+                    fetch_ms=fetch_ms,
+                )
         except FetchError as exc:
             if fetch_ms is None:
                 fetch_ms = (time.monotonic() - fetch_start) * 1000.0
@@ -329,6 +381,18 @@ class Pipeline:
                         url, self.config.render, self.config.fetch.user_agent
                     )
                     render_ms = (time.monotonic() - render_start) * 1000.0
+                    if _is_captcha_html(rendered):
+                        return _build_result(
+                            None,
+                            True,
+                            None,
+                            [],
+                            [],
+                            error="captcha_detected",
+                            status_code=fetch_status,
+                            fetch_ms=fetch_ms,
+                            render_ms=render_ms,
+                        )
                     text, images, videos, meta, extract_ms, image_ms, video_ms = (
                         self._extract_with_images(rendered, url, media_urls=media_urls)
                     )
