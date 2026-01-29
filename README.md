@@ -72,6 +72,7 @@ cfg.render.extra_headers = {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Referer": "https://mp.weixin.qq.com/",
 }
+cfg.render.wait_selector = "article, .article, .article-content"  # 支持多选择器
 cfg.render.cookies = [
     {"name": "your_cookie", "value": "xxx", "domain": ".mp.weixin.qq.com", "path": "/"}
 ]
@@ -80,22 +81,26 @@ cfg.render.reuse_context = True  # 批量渲染时复用 context 以提速
 pipeline = Pipeline(cfg)
 result = pipeline.extract_url("https://example.com/article")
 ```
+说明：
+- 未设置 `wait_selector` 时，会按域名与 HTML 结构自动挑选常见正文容器（多选择器）用于等待。
 
 ### 图片保留与输出格式
 ```python
 cfg = PipelineConfig()
 cfg.extract.keep_images = True
-cfg.extract.append_images = True   # 在正文末尾追加 [Images] 列表
+cfg.extract.append_images = True   # 在正文末尾追加图片列表（HTML 模式下为 <ul><img>）
 cfg.extract.inline_images = False  # 设为 True 时输出 Markdown 并原位插入图片（对所有站点生效）
 cfg.extract.keep_videos = True
-cfg.extract.append_videos = False  # 在正文末尾追加 [Videos] 列表
+cfg.extract.append_videos = False  # 在正文末尾追加视频列表（HTML 模式下为 <ul><video>）
 cfg.extract.inline_videos = False  # 设为 True 时会在正文中插入 [Video] url
-cfg.extract.output_format = "txt"  # "txt" 或 "md"
+cfg.extract.output_format = "txt"  # "txt" / "md" / "html"
 ```
 
 说明：
 - 当 `inline_images=True` 且 `output_format="txt"` 时，会把 `![](url)` 转为 `[Image] url`。
-- 当 `inline_videos=True` 时，会把 HTML 中的 `<video>/<source>` 转成 `[Video] url`。
+- 当 `output_format="html"` 时，将保留 HTML 并输出 `<img>` 标签（会自动修正懒加载 src）。
+- HTML 输出会自动附带一份基础样式（居中排版、图片/视频自适应、表格样式等）。
+- 当 `inline_videos=True` 时，会把 HTML 中的 `<video>/<source>` 转成 `[Video] url`；若 `output_format="html"` 则输出 `<video>` 标签。
 
 ### 微信文章图片（mp.weixin.qq.com）
 ```python

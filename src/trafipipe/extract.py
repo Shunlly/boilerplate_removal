@@ -60,6 +60,8 @@ def _normalize_output_format(fmt: str) -> str:
     val = (fmt or "txt").strip().lower()
     if val in {"md", "markdown"}:
         return "markdown"
+    if val in {"html", "htm"}:
+        return "html"
     if val in {"txt", "text"}:
         return "txt"
     return val
@@ -268,6 +270,22 @@ def _svg_tag_name(tag: str) -> str:
     return tag.lower()
 
 
+_HTML_OUTPUT_STYLE = (
+    "body{max-width:860px;margin:32px auto;padding:0 16px;"
+    "font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",\"PingFang SC\","
+    "\"Microsoft YaHei\",\"Noto Sans CJK SC\",Arial,sans-serif;"
+    "line-height:1.7;color:#222;background:#fff;}"
+    "h1,h2,h3,h4{line-height:1.3;margin:1.2em 0 0.6em;}"
+    "p{margin:0.6em 0;}"
+    "img,video{max-width:100%;height:auto;border-radius:8px;}"
+    "table{width:100%;border-collapse:collapse;margin:1em 0;}"
+    "th,td{border:1px solid #ddd;padding:8px;}"
+    "pre,code{background:#f5f5f5;border-radius:6px;padding:2px 6px;}"
+    ".images,.videos{margin-top:1.5em;}"
+    ".images h2,.videos h2{font-size:1.1em;margin:0 0 0.6em;}"
+)
+
+
 def _parse_svg_text_nodes(svg: str) -> List[Tuple[float, float, str]]:
     try:
         root = ElementTree.fromstring(svg)
@@ -321,6 +339,20 @@ def _extract_svg_text(html: str) -> Optional[str]:
         lines.append("".join(line_parts).strip())
     lines = [ln for ln in lines if ln]
     return "\n".join(lines) if lines else None
+
+
+def _apply_html_style(content: str) -> str:
+    style_tag = f"<style>{_HTML_OUTPUT_STYLE}</style>"
+    if re.search(r"<html\\b", content, re.IGNORECASE):
+        if re.search(r"<head\\b", content, re.IGNORECASE):
+            return re.sub(r"(<head[^>]*>)", r"\\1" + style_tag, content, count=1, flags=re.IGNORECASE)
+        if re.search(r"<body\\b", content, re.IGNORECASE):
+            return re.sub(r"(<body[^>]*>)", r"<head>" + style_tag + r"</head>\\1", content, count=1, flags=re.IGNORECASE)
+        return re.sub(r"(<html[^>]*>)", r"\\1<head>" + style_tag + r"</head>", content, count=1, flags=re.IGNORECASE)
+    if re.search(r"<(p|div|span|table|h1|h2|h3|ul|ol|li|img|video|pre|br)\\b", content, re.IGNORECASE):
+        return f"<html><head>{style_tag}</head><body><div class=\"trafipipe-content\">{content}</div></body></html>"
+    safe = escape(content).replace("\n", "<br/>")
+    return f"<html><head>{style_tag}</head><body><div class=\"trafipipe-content\">{safe}</div></body></html>"
 
 
 def _parse_tag_attributes(tag: str) -> Dict[str, Optional[str]]:
@@ -444,7 +476,9 @@ def _inline_markdown_images(html: str, base_url: Optional[str]) -> str:
     return _IMG_TAG_RE.sub(lambda m: _img_tag_to_markdown(m.group(0), base_url), html)
 
 
-def _promote_inline_images(html: str, url: Optional[str]) -> str:
+def _promote_inline_images(
+    html: str, url: Optional[str], *, as_markdown: bool = True
+) -> str:
     html_for_images = html
     if url and "mp.weixin.qq.com" in url:
         content = _extract_wechat_content(html)
@@ -453,7 +487,9 @@ def _promote_inline_images(html: str, url: Optional[str]) -> str:
             head = f"<head><title>{escape(title)}</title></head>" if title else ""
             html_for_images = f"<html>{head}<body>{content}</body></html>"
     html_for_images = _rewrite_img_tags(html_for_images)
-    return _inline_markdown_images(html_for_images, url)
+    if as_markdown:
+        return _inline_markdown_images(html_for_images, url)
+    return html_for_images
 
 
 def _collect_style_urls(html: str, base_url: Optional[str]) -> List[str]:
@@ -606,16 +642,34 @@ def _extract_media_urls_from_tag(
     return urls
 
 
-def _inline_video_placeholders(html: str, base_url: Optional[str]) -> str:
-    def _format(urls: List[str]) -> str:
-        if not urls:
-            return ""
+def _inline_video_placeholders(
+    html: str, base_url: Optional[str], *, as_html: bool = False
+) -> str:
+    def _dedupe(urls: List[str]) -> List[str]:
         seen = set()
-        lines = []
+        ordered = []
         for url in urls:
             if url in seen:
                 continue
             seen.add(url)
+            ordered.append(url)
+        return ordered
+
+    def _format(urls: List[str]) -> str:
+        urls = _dedupe(urls)
+        if not urls:
+            return ""
+        if as_html:
+            if len(urls) == 1:
+                safe = escape(urls[0], quote=True)
+                return f'<video controls src="{safe}"></video>'
+            sources = []
+            for url in urls:
+                safe = escape(url, quote=True)
+                sources.append(f'<source src="{safe}"/>')
+            return "<video controls>\n" + "\n".join(sources) + "\n</video>"
+        lines = []
+        for url in urls:
             safe_url = escape(url, quote=False)
             lines.append(f"[Video] {safe_url}")
         return "\n".join(lines)
@@ -927,13 +981,21 @@ def extract_text_and_metadata(
     html: str, url: Optional[str], config: ExtractConfig
 ) -> Tuple[Optional[str], Dict[str, Optional[str]]]:
     fmt = _normalize_output_format(config.output_format)
-    output_format = "markdown" if config.inline_images else fmt
+    output_format = fmt
 
     html_for_extract = _narrow_book118_html(html, url)
     if config.inline_images:
-        html_for_extract = _promote_inline_images(html_for_extract, url)
+        if fmt == "html":
+            html_for_extract = _promote_inline_images(
+                html_for_extract, url, as_markdown=False
+            )
+        else:
+            html_for_extract = _promote_inline_images(html_for_extract, url)
+            output_format = "markdown"
     if config.inline_videos:
-        html_for_extract = _inline_video_placeholders(html_for_extract, url)
+        html_for_extract = _inline_video_placeholders(
+            html_for_extract, url, as_html=(fmt == "html")
+        )
 
     text, doc = _run_trafilatura(html_for_extract, url, config, output_format)
     svg_text = _extract_svg_text(html)
@@ -959,6 +1021,9 @@ def extract_text_and_metadata(
 
     if config.with_metadata and not meta and doc is None:
         meta = extract_metadata_from_html(html, url)
+
+    if fmt == "html" and text:
+        text = _apply_html_style(text)
 
     return text, meta
 

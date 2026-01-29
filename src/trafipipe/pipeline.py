@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from html import escape
 import re
 import time
 from typing import Iterable, List, Optional
@@ -74,6 +75,123 @@ def _hostname(url: str) -> str:
         return (urlparse(url).hostname or "").lower()
     except Exception:
         return ""
+
+
+_DOMAIN_WAIT_SELECTORS = (
+    ("xie.infoq.cn", "article, .article, .article-content"),
+    (".zhihu.com", ".Post-RichText, .RichText"),
+    (".csdn.net", ".markdown-body, #article_content, .article_content, .article-content"),
+    ("www.sohu.com", "#mp-editor, article, .article, .article-content"),
+    (".sina.com.cn", "article, .article, #article, .article-content"),
+    (".cnblogs.com", "#cnblogs_post_body, .postBody, .post-body"),
+    (".docin.com", ".doc-content, .doc-con, .reader, .doc-view"),
+    (".11467.com", ".detail-content, .detail, .content, .content-detail"),
+)
+
+_AUTO_WAIT_SELECTORS = (
+    "#article",
+    "#article-content",
+    "#article_body",
+    "#article-body",
+    "#articleContent",
+    "#content",
+    "#content-detail",
+    "#content-body",
+    "#content-main",
+    "#main-content",
+    "#main",
+    "#mp-editor",
+    "#js_content",
+    "#cnblogs_post_body",
+    "#article_content",
+    ".article",
+    ".article-content",
+    ".article__content",
+    ".article-body",
+    ".article-detail",
+    ".article-text",
+    ".post",
+    ".post-content",
+    ".post-body",
+    ".entry-content",
+    ".entry-body",
+    ".content",
+    ".content-detail",
+    ".content-body",
+    ".content-main",
+    ".content-text",
+    ".main-content",
+    ".main",
+    ".detail",
+    ".detail-content",
+    ".doc-content",
+    ".doc-con",
+    ".reader",
+    ".doc-view",
+    ".rich_media_content",
+    ".RichText",
+    ".Post-RichText",
+    ".markdown-body",
+    ".htmledit_views",
+    ".article_content",
+)
+
+_CLASS_ID_TOKEN_RE = re.compile(r'(?:class|id)=["\']([^"\']+)["\']', re.IGNORECASE)
+
+
+def _match_domain_wait_selector(host: str) -> Optional[str]:
+    if not host:
+        return None
+    for pattern, selector in _DOMAIN_WAIT_SELECTORS:
+        if pattern.startswith("."):
+            if host.endswith(pattern):
+                return selector
+        elif host == pattern:
+            return selector
+    return None
+
+
+def _extract_html_tokens(html: Optional[str]) -> set[str]:
+    if not html:
+        return set()
+    tokens: set[str] = set()
+    for match in _CLASS_ID_TOKEN_RE.finditer(html):
+        value = match.group(1)
+        if not value:
+            continue
+        for token in value.split():
+            if token:
+                tokens.add(token)
+    return tokens
+
+
+def _pick_wait_selector(html: Optional[str], url: str, cfg: PipelineConfig) -> Optional[str]:
+    if cfg.render.wait_selector:
+        return cfg.render.wait_selector
+    host = _hostname(url)
+    selector = _match_domain_wait_selector(host)
+    if selector:
+        return selector
+    if not html:
+        return None
+    lowered = html.lower()
+    tokens = _extract_html_tokens(html)
+    selectors: List[str] = []
+    seen: set[str] = set()
+    if "<article" in lowered:
+        selectors.append("article")
+        seen.add("article")
+    if "<main" in lowered and "main" not in seen:
+        selectors.append("main")
+        seen.add("main")
+    for sel in _AUTO_WAIT_SELECTORS:
+        key = sel.lstrip(".#")
+        if key in tokens and sel not in seen:
+            selectors.append(sel)
+            seen.add(sel)
+    if not selectors:
+        return None
+    return ", ".join(selectors)
 
 
 _X_SIGNUP_MARKERS = {
@@ -196,8 +314,53 @@ def _clean_text_for_url(text: Optional[str], url: str) -> Optional[str]:
     return text
 
 
-def _append_videos_to_text(text: str, videos: List[str], url: str) -> str:
-    block = "\n\n[Videos]\n" + "\n".join(videos)
+def _is_html_output(output_format: str) -> bool:
+    fmt = (output_format or "txt").strip().lower()
+    return fmt in {"html", "htm"}
+
+
+def _append_html_block(text: str, block: str) -> str:
+    if not text:
+        return block
+    if re.search(r"</body>", text, re.IGNORECASE):
+        return re.sub(r"</body>", block + "</body>", text, count=1, flags=re.IGNORECASE)
+    if re.search(r"</html>", text, re.IGNORECASE):
+        return re.sub(r"</html>", block + "</html>", text, count=1, flags=re.IGNORECASE)
+    return text + block
+
+
+def _append_images_to_text(
+    text: str, images: List[str], *, html_output: bool
+) -> str:
+    if html_output:
+        items = "\n".join(
+            f'<li><img src="{escape(url, quote=True)}"/></li>' for url in images
+        )
+        block = (
+            "\n<div class=\"images\"><h2>Images</h2><ul>\n"
+            + items
+            + "\n</ul></div>"
+        )
+        return _append_html_block(text, block)
+    return text + "\n\n[Images]\n" + "\n".join(images)
+
+
+def _append_videos_to_text(
+    text: str, videos: List[str], url: str, *, html_output: bool
+) -> str:
+    if html_output:
+        items = "\n".join(
+            f'<li><video controls src="{escape(url, quote=True)}"></video></li>'
+            for url in videos
+        )
+        block = (
+            "\n<div class=\"videos\"><h2>Videos</h2><ul>\n"
+            + items
+            + "\n</ul></div>"
+        )
+        return _append_html_block(text, block)
+    else:
+        block = "\n\n[Videos]\n" + "\n".join(videos)
     host = _hostname(url)
     if host.endswith("x.com") or host.endswith("twitter.com"):
         for marker in ("New to X?", "Sign up now", "Sign up"):
@@ -217,6 +380,7 @@ class Pipeline:
         self, html: str, url: str, media_urls: Optional[List[str]] = None
     ):
         extract_start = time.monotonic()
+        html_output = _is_html_output(self.config.extract.output_format)
         text, meta = extract_text_and_metadata(html, url, self.config.extract)
         text = _clean_text_for_url(text, url)
         extract_ms = (time.monotonic() - extract_start) * 1000.0
@@ -242,7 +406,7 @@ class Pipeline:
                 and self.config.extract.append_images
                 and not self.config.extract.inline_images
             ):
-                text = text + "\n\n[Images]\n" + "\n".join(images)
+                text = _append_images_to_text(text, images, html_output=html_output)
             image_ms = (time.monotonic() - image_start) * 1000.0
         videos = []
         video_ms = None
@@ -264,9 +428,18 @@ class Pipeline:
                     videos.append(media_url)
             should_append = self.config.extract.append_videos
             if text and videos and should_append:
-                text = _append_videos_to_text(text, videos, url)
+                text = _append_videos_to_text(
+                    text, videos, url, html_output=html_output
+                )
             video_ms = (time.monotonic() - video_start) * 1000.0
         return text, images, videos, meta, extract_ms, image_ms, video_ms
+
+    def _render_with_media(self, url: str, html: Optional[str]) -> tuple[str, List[str]]:
+        wait_selector = _pick_wait_selector(html, url, self.config)
+        render_cfg = self.config.render
+        if wait_selector and wait_selector != render_cfg.wait_selector:
+            render_cfg = replace(render_cfg, wait_selector=wait_selector)
+        return render_html_with_media(url, render_cfg, self.config.fetch.user_agent)
 
     def extract_url(self, url: str) -> ExtractResult:
         start = time.monotonic()
@@ -315,9 +488,7 @@ class Pipeline:
         if self.config.render.mode == "always":
             try:
                 render_start = time.monotonic()
-                rendered, media_urls = render_html_with_media(
-                    url, self.config.render, self.config.fetch.user_agent
-                )
+                rendered, media_urls = self._render_with_media(url, None)
                 render_ms = (time.monotonic() - render_start) * 1000.0
                 if _is_captcha_html(rendered):
                     return _build_result(
@@ -377,9 +548,7 @@ class Pipeline:
             if self.config.render.mode != "never":
                 try:
                     render_start = time.monotonic()
-                    rendered, media_urls = render_html_with_media(
-                        url, self.config.render, self.config.fetch.user_agent
-                    )
+                    rendered, media_urls = self._render_with_media(url, None)
                     render_ms = (time.monotonic() - render_start) * 1000.0
                     if _is_captcha_html(rendered):
                         return _build_result(
@@ -437,16 +606,36 @@ class Pipeline:
         text, images, videos, meta, extract_ms, image_ms, video_ms = (
             self._extract_with_images(html, url)
         )
+        fetch_text = text
+        fetch_images = images
+        fetch_videos = videos
+        fetch_meta = meta
+        fetch_extract_ms = extract_ms
+        fetch_image_ms = image_ms
+        fetch_video_ms = video_ms
         if _should_render(text, self.config) or _should_render_by_markers(html):
             try:
                 render_start = time.monotonic()
-                rendered, media_urls = render_html_with_media(
-                    url, self.config.render, self.config.fetch.user_agent
-                )
+                rendered, media_urls = self._render_with_media(url, html)
                 render_ms = (time.monotonic() - render_start) * 1000.0
                 text, images, videos, meta, extract_ms, image_ms, video_ms = (
                     self._extract_with_images(rendered, url, media_urls=media_urls)
                 )
+                if not text:
+                    return _build_result(
+                        fetch_text,
+                        False,
+                        html,
+                        fetch_images,
+                        fetch_videos,
+                        meta=fetch_meta,
+                        status_code=fetch_status,
+                        fetch_ms=fetch_ms,
+                        render_ms=render_ms,
+                        extract_ms=fetch_extract_ms,
+                        image_ms=fetch_image_ms,
+                        video_ms=fetch_video_ms,
+                    )
                 return _build_result(
                     text,
                     True,
